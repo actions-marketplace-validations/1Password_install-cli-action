@@ -18,14 +18,14 @@ To install the latest version of the 1Password CLI: \
 
 ```yaml
 - name: Install 1Password CLI
-  uses: 1password/install-cli-action@v1
+  uses: 1password/install-cli-action@v2
 ```
 
 To install the latest beta version (i.e. `latest-beta`) of the 1Password CLI:
 
 ```yaml
 - name: Install 1Password CLI
-  uses: 1password/install-cli-action@v1
+  uses: 1password/install-cli-action@v2
   with:
     version: latest-beta
 ```
@@ -34,14 +34,14 @@ To install a specific version of the 1Password CLI:
 
 ```yaml
 - name: Install 1Password CLI
-  uses: 1password/install-cli-action@v1
+  uses: 1password/install-cli-action@v2
   with:
-    version: 2.18.0
+    version: 2.31.1
 ```
 
 ## ⚙️ Supported Runners
 
-You can perform the action on Linux and macOS runners. Windows is not currently supported.
+You can perform the action on Linux, macOS, and Windows runners.
 
 ## 💙 Community & Support
 
@@ -53,6 +53,4 @@ You can perform the action on Linux and macOS runners. Windows is not currently 
 
 1Password requests you practice responsible disclosure if you discover a vulnerability.
 
-Please file requests via [**BugCrowd**](https://bugcrowd.com/agilebits).
-
-For information about security practices, please visit our [Security homepage](https://bugcrowd.com/agilebits).
+Please file requests by sending an email to bugbounty@agilebits.com.
