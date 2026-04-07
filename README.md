@@ -18,14 +18,14 @@ To install the latest version of the 1Password CLI: \
 
 ```yaml
 - name: Install 1Password CLI
-  uses: 1password/install-cli-action@v2
+  uses: 1password/install-cli-action@v3
 ```
 
 To install the latest beta version (i.e. `latest-beta`) of the 1Password CLI:
 
 ```yaml
 - name: Install 1Password CLI
-  uses: 1password/install-cli-action@v2
+  uses: 1password/install-cli-action@v3
   with:
     version: latest-beta
 ```
@@ -34,7 +34,7 @@ To install a specific version of the 1Password CLI:
 
 ```yaml
 - name: Install 1Password CLI
-  uses: 1password/install-cli-action@v2
+  uses: 1password/install-cli-action@v3
   with:
     version: 2.31.1
 ```
@@ -46,7 +46,7 @@ You can perform the action on Linux, macOS, and Windows runners.
 ## 💙 Community & Support
 
 - File an [issue](https://github.com/1Password/install-cli-action/issues) for bugs and feature requests.
-- Join the [Developer Slack workspace](https://join.slack.com/t/1password-devs/shared_invite/zt-1halo11ps-6o9pEv96xZ3LtX_VE0fJQA).
+- Join the [Developer Slack workspace](https://developer.1password.com/joinslack).
 - Subscribe to the [Developer Newsletter](https://1password.com/dev-subscribe/).
 
 ## 🔐 Security
