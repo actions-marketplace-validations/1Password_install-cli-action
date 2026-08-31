@@ -254,6 +254,9 @@ class Range {
   }
 
   parseRange (range) {
+    // strip build metadata so it can't bleed into the version
+    range = range.replace(BUILDSTRIPRE, '')
+
     // memoize range parsing for performance.
     // this is a very hot path, and fully deterministic.
     const memoOpts =
@@ -379,12 +382,16 @@ const debug = __nccwpck_require__(1159)
 const SemVer = __nccwpck_require__(7163)
 const {
   safeRe: re,
+  src,
   t,
   comparatorTrimReplace,
   tildeTrimReplace,
   caretTrimReplace,
 } = __nccwpck_require__(5471)
 const { FLAG_INCLUDE_PRERELEASE, FLAG_LOOSE } = __nccwpck_require__(5101)
+
+// unbounded global build-metadata stripper used by parseRange
+const BUILDSTRIPRE = new RegExp(src[t.BUILD], 'g')
 
 const isNullSet = c => c.value === '<0.0.0-0'
 const isAny = c => c.value === ''
@@ -426,6 +433,11 @@ const parseComparator = (comp, options) => {
 
 const isX = id => !id || id.toLowerCase() === 'x' || id === '*'
 
+const invalidXRangeOrder = (M, m, p) => (
+  (isX(M) && !isX(m)) ||
+  (isX(m) && p && !isX(p))
+)
+
 // ~, ~> --> * (any, kinda silly)
 // ~2, ~2.x, ~2.x.x, ~>2, ~>2.x ~>2.x.x --> >=2.0.0 <3.0.0-0
 // ~2.0, ~2.0.x, ~>2.0, ~>2.0.x --> >=2.0.0 <2.1.0-0
@@ -443,6 +455,10 @@ const replaceTildes = (comp, options) => {
 
 const replaceTilde = (comp, options) => {
   const r = options.loose ? re[t.TILDELOOSE] : re[t.TILDE]
+  // if we're including prereleases in the match, then the lower bound is
+  // -0, the lowest possible prerelease value, just like x-ranges and carets.
+  // this keeps `~1.2` equivalent to the `1.2.x` x-range it's documented as.
+  const z = options.includePrerelease ? '-0' : ''
   return comp.replace(r, (_, M, m, p, pr) => {
     debug('tilde', comp, _, M, m, p, pr)
     let ret
@@ -450,10 +466,10 @@ const replaceTilde = (comp, options) => {
     if (isX(M)) {
       ret = ''
     } else if (isX(m)) {
-      ret = `>=${M}.0.0 <${+M + 1}.0.0-0`
+      ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`
     } else if (isX(p)) {
       // ~1.2 == >=1.2.0 <1.3.0-0
-      ret = `>=${M}.${m}.0 <${M}.${+m + 1}.0-0`
+      ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`
     } else if (pr) {
       debug('replaceTilde pr', pr)
       ret = `>=${M}.${m}.${p}-${pr
@@ -522,10 +538,10 @@ const replaceCaret = (comp, options) => {
       if (M === '0') {
         if (m === '0') {
           ret = `>=${M}.${m}.${p
-          }${z} <${M}.${m}.${+p + 1}-0`
+          } <${M}.${m}.${+p + 1}-0`
         } else {
           ret = `>=${M}.${m}.${p
-          }${z} <${M}.${+m + 1}.0-0`
+          } <${M}.${+m + 1}.0-0`
         }
       } else {
         ret = `>=${M}.${m}.${p
@@ -551,6 +567,10 @@ const replaceXRange = (comp, options) => {
   const r = options.loose ? re[t.XRANGELOOSE] : re[t.XRANGE]
   return comp.replace(r, (ret, gtlt, M, m, p, pr) => {
     debug('xRange', comp, ret, gtlt, M, m, p, pr)
+    if (invalidXRangeOrder(M, m, p)) {
+      return comp
+    }
+
     const xM = isX(M)
     const xm = xM || isX(m)
     const xp = xm || isX(p)
@@ -726,6 +746,22 @@ const { safeRe: re, t } = __nccwpck_require__(5471)
 
 const parseOptions = __nccwpck_require__(356)
 const { compareIdentifiers } = __nccwpck_require__(3348)
+
+const isPrereleaseIdentifier = (prerelease, identifier) => {
+  const identifiers = identifier.split('.')
+  if (identifiers.length > prerelease.length) {
+    return false
+  }
+
+  for (let i = 0; i < identifiers.length; i++) {
+    if (compareIdentifiers(prerelease[i], identifiers[i]) !== 0) {
+      return false
+    }
+  }
+
+  return true
+}
+
 class SemVer {
   constructor (version, options) {
     options = parseOptions(options)
@@ -1029,8 +1065,9 @@ class SemVer {
           if (identifierBase === false) {
             prerelease = [identifier]
           }
-          if (compareIdentifiers(this.prerelease[0], identifier) === 0) {
-            if (isNaN(this.prerelease[1])) {
+          if (isPrereleaseIdentifier(this.prerelease, identifier)) {
+            const prereleaseBase = this.prerelease[identifier.split('.').length]
+            if (isNaN(prereleaseBase)) {
               this.prerelease = prerelease
             }
           } else {
@@ -1540,6 +1577,61 @@ module.exports = sort
 
 /***/ }),
 
+/***/ 6114:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+
+
+const parse = __nccwpck_require__(6353)
+const constants = __nccwpck_require__(5101)
+const SemVer = __nccwpck_require__(7163)
+
+const truncate = (version, truncation, options) => {
+  if (!constants.RELEASE_TYPES.includes(truncation)) {
+    return null
+  }
+
+  const clonedVersion = cloneInputVersion(version, options)
+  return clonedVersion && doTruncation(clonedVersion, truncation)
+}
+
+const cloneInputVersion = (version, options) => {
+  const versionStringToParse = (
+    version instanceof SemVer ? version.version : version
+  )
+
+  return parse(versionStringToParse, options)
+}
+
+const doTruncation = (version, truncation) => {
+  if (isPrerelease(truncation)) {
+    return version.version
+  }
+
+  version.prerelease = []
+
+  switch (truncation) {
+    case 'major':
+      version.minor = 0
+      version.patch = 0
+      break
+    case 'minor':
+      version.patch = 0
+      break
+  }
+
+  return version.format()
+}
+
+const isPrerelease = (type) => {
+  return type.startsWith('pre')
+}
+
+module.exports = truncate
+
+
+/***/ }),
+
 /***/ 8780:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -1588,6 +1680,7 @@ const gte = __nccwpck_require__(1236)
 const lte = __nccwpck_require__(6717)
 const cmp = __nccwpck_require__(8646)
 const coerce = __nccwpck_require__(5385)
+const truncate = __nccwpck_require__(6114)
 const Comparator = __nccwpck_require__(9379)
 const Range = __nccwpck_require__(6782)
 const satisfies = __nccwpck_require__(8011)
@@ -1626,6 +1719,7 @@ module.exports = {
   lte,
   cmp,
   coerce,
+  truncate,
   Comparator,
   Range,
   satisfies,
@@ -1965,7 +2059,7 @@ createToken('LOOSE', `^${src[t.LOOSEPLAIN]}$`)
 createToken('GTLT', '((?:<|>)?=?)')
 
 // Something like "2.*" or "1.2.x".
-// Note that "x.x" is a valid xRange identifer, meaning "any version"
+// Note that "x.x" is a valid xRange identifier, meaning "any version"
 // Only the first item is strictly required.
 createToken('XRANGEIDENTIFIERLOOSE', `${src[t.NUMERICIDENTIFIERLOOSE]}|x|X|\\*`)
 createToken('XRANGEIDENTIFIER', `${src[t.NUMERICIDENTIFIER]}|x|X|\\*`)
@@ -2557,7 +2651,7 @@ const simpleSubset = (sub, dom, options) => {
         if (higher === c && higher !== gt) {
           return false
         }
-      } else if (gt.operator === '>=' && !satisfies(gt.semver, String(c), options)) {
+      } else if (gt.operator === '>=' && !c.test(gt.semver)) {
         return false
       }
     }
@@ -2575,7 +2669,7 @@ const simpleSubset = (sub, dom, options) => {
         if (lower === c && lower !== lt) {
           return false
         }
-      } else if (lt.operator === '<=' && !satisfies(lt.semver, String(c), options)) {
+      } else if (lt.operator === '<=' && !c.test(lt.semver)) {
         return false
       }
     }
@@ -33503,7 +33597,7 @@ function error(message, properties = {}) {
  * @param properties optional properties to add to the annotation.
  */
 function warning(message, properties = {}) {
-    issueCommand('warning', toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+    command_issueCommand('warning', utils_toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 /**
  * Adds a notice issue
@@ -33612,27 +33706,19 @@ var ReleaseChannel;
     ReleaseChannel["latestBeta"] = "latest-beta";
 })(ReleaseChannel || (ReleaseChannel = {}));
 
-;// CONCATENATED MODULE: ./src/op-cli-installer/version/helper.ts
-
-
-// Returns the latest version of the 1Password CLI based on the specified channel.
-const getLatestVersion = async (channel) => {
-    info(`Getting ${channel} version number`);
-    const res = await fetch("https://app-updates.agilebits.com/latest");
-    const json = (await res.json());
-    const latestStable = json?.CLI2?.release?.version;
-    const latestBeta = json?.CLI2?.beta?.version;
-    const version = channel === ReleaseChannel.latestBeta ? latestBeta : latestStable;
-    if (!version) {
-        error(`No ${channel} versions found`);
-        throw new Error(`No ${channel} versions found`);
-    }
-    return version;
-};
-
 // EXTERNAL MODULE: ./node_modules/semver/index.js
 var node_modules_semver = __nccwpck_require__(2088);
 var semver_default = /*#__PURE__*/__nccwpck_require__.n(node_modules_semver);
+;// CONCATENATED MODULE: ./src/op-cli-installer/version/fallback-versions.ts
+// AUTO-GENERATED by scripts/update-fallback-versions.mjs — do not edit by hand.
+// Last-resort CLI versions, used only when both app-updates and Docker Hub are
+// unavailable. Refresh with `npm run op-version` (see release docs).
+
+const FALLBACK_VERSIONS = {
+    [ReleaseChannel.latest]: "2.35.0",
+    [ReleaseChannel.latestBeta]: "2.38.0-beta.01",
+};
+
 ;// CONCATENATED MODULE: ./src/op-cli-installer/version/validate.ts
 
 
@@ -33652,6 +33738,88 @@ const validateVersion = (input) => {
         return;
     }
     throw new Error(`Invalid version input: ${input}`);
+};
+
+;// CONCATENATED MODULE: ./src/op-cli-installer/version/helper.ts
+
+
+
+
+
+const APP_UPDATES_URL = "https://app-updates.agilebits.com/latest";
+const DOCKER_HUB_TAGS_URL = "https://hub.docker.com/v2/repositories/1password/op/tags/?page_size=100&ordering=last_updated";
+const FETCH_TIMEOUT_MS = 10_000;
+/**
+ * Returns the latest version of the 1Password CLI for the given release channel.
+ *
+ * app-updates.agilebits.com is the canonical source; if it is unavailable, this
+ * falls back to the 1password/op Docker Hub image tags.
+ */
+const getLatestVersion = async (channel) => {
+    info(`Getting ${channel} version number`);
+    try {
+        return await getLatestVersionFromAppUpdates(channel);
+    }
+    catch (appUpdatesError) {
+        warning(`Could not resolve ${channel} version from app-updates.agilebits.com (${String(appUpdatesError)}); falling back to Docker Hub`);
+        try {
+            return await getLatestVersionFromDockerHub(channel);
+        }
+        catch (dockerHubError) {
+            warning(`Could not resolve ${channel} version from Docker Hub (${String(dockerHubError)}); using the version baked in at build time`);
+            // Couldn't get the version from either source, so return the fallback version pinned at last build.
+            const fallbackVersion = FALLBACK_VERSIONS[channel];
+            validateVersion(fallbackVersion);
+            return fallbackVersion;
+        }
+    }
+};
+// Resolves the latest version from the canonical app-updates.agilebits.com feed.
+const getLatestVersionFromAppUpdates = async (channel) => {
+    const res = await fetch(APP_UPDATES_URL, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+        throw new Error(`app-updates.agilebits.com returned status ${res.status}`);
+    }
+    const json = (await res.json());
+    const latestStable = json.CLI2?.release?.version;
+    const latestBeta = json.CLI2?.beta?.version;
+    const version = channel === ReleaseChannel.latestBeta ? latestBeta : latestStable;
+    if (!version) {
+        throw new Error(`No ${channel} versions found`);
+    }
+    validateVersion(version);
+    return version;
+};
+// Resolves the latest version from the 1password/op Docker Hub image tags.
+const getLatestVersionFromDockerHub = async (channel) => {
+    const res = await fetch(DOCKER_HUB_TAGS_URL, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+        throw new Error(`Docker Hub returned status ${res.status}`);
+    }
+    const json = (await res.json());
+    const tags = json.results?.map((result) => result.name) ?? [];
+    const isBeta = channel === ReleaseChannel.latestBeta;
+    const candidates = tags.filter((tag) => isBeta
+        ? /^\d+\.\d+\.\d+-beta\.\d+$/.test(tag)
+        : /^\d+\.\d+\.\d+$/.test(tag));
+    // Beta tags like 2.37.0-beta.01 aren't valid semver so strip it only to sort them,
+    // then return the original tag unchanged.
+    const version = candidates
+        .map((tag) => ({
+        tag,
+        normalized: tag.replace(/-beta\.0*(\d+)/, "-beta.$1"),
+    }))
+        .filter(({ normalized }) => semver_default().valid(normalized))
+        .sort((a, b) => semver_default().rcompare(a.normalized, b.normalized))[0]?.tag;
+    if (!version) {
+        throw new Error(`No ${channel} versions found`);
+    }
+    validateVersion(version);
+    return version;
 };
 
 ;// CONCATENATED MODULE: ./src/op-cli-installer/version/version-resolver.ts
@@ -34535,18 +34703,141 @@ class CliInstaller {
     }
 }
 
+;// CONCATENATED MODULE: ./src/op-cli-installer/github-action/cli-installer/linux-signature.ts
+
+
+
+
+
+const execFileAsync = (0,external_util_.promisify)(external_child_process_namespaceObject.execFile);
+// 1Password's code-signing GPG key fingerprint. See
+// https://www.1password.dev/cli/verify.
+const ONEPASSWORD_GPG_KEY_FINGERPRINT = "3FEF9748469ADBE15DA7CA80AC2D62742012EA22";
+// Bundled 1Password code-signing public key `linux-signing-key.asc` in
+// this directory. Bundled to avoid a runtime keyserver/URL dependency.
+// Source: https://downloads.1password.com/linux/keys/1password.asc
+const ONEPASSWORD_GPG_PUBLIC_KEY_PATH = __nccwpck_require__.ab + "linux-signing-key.asc";
+const defaultGpgRunner = async (args) => {
+    const { stdout } = await execFileAsync("gpg", args);
+    return stdout;
+};
+/**
+ * Throws unless the binary at opPath carries a valid GPG signature (at
+ * sigPath) from the pinned 1Password key. The key is bundled with the action.
+ */
+const verifyLinuxSignature = async (opPath, sigPath, runGpg = defaultGpgRunner) => {
+    const gpgHome = external_fs_namespaceObject.mkdtempSync(external_path_namespaceObject.join(external_os_namespaceObject.tmpdir(), "op-verify-"));
+    try {
+        const baseArgs = ["--homedir", gpgHome, "--batch", "--no-tty"];
+        // Import the bundled key into the temp keyring.
+        await runGpg([...baseArgs, "--import", __nccwpck_require__.ab + "linux-signing-key.asc"]);
+        // Confirm we imported the pinned key.
+        const keyringListing = await runGpg([
+            ...baseArgs,
+            "--list-keys",
+            "--with-colons",
+        ]);
+        if (!keyringListing.includes(`${ONEPASSWORD_GPG_KEY_FINGERPRINT}:`)) {
+            throw new Error(`bundled GPG key does not match expected fingerprint ${ONEPASSWORD_GPG_KEY_FINGERPRINT}.`);
+        }
+        // Verify op.sig against op using the imported key.
+        await runGpg([...baseArgs, "--verify", sigPath, opPath]);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`1Password CLI signature verification failed: ${message}. ` +
+            "If 1Password has rotated their GPG signing key, this action needs to be updated — please file an issue at https://github.com/1Password/install-cli-action/issues.");
+    }
+    finally {
+        external_fs_namespaceObject.rmSync(gpgHome, { recursive: true, force: true });
+    }
+};
+
 ;// CONCATENATED MODULE: ./src/op-cli-installer/github-action/cli-installer/linux.ts
 
+
+
+
+
+/** Installs the 1Password CLI on Linux runners. */
 class LinuxInstaller extends CliInstaller {
     platform = "linux"; // Node.js platform identifier for Linux
-    constructor(version) {
-        super(version);
-    }
+    /** Downloads, verifies, and installs the CLI for the configured version. */
     async installCli() {
         const urlBuilder = cliUrlBuilder[this.platform];
-        await super.install(urlBuilder(this.version, this.arch));
+        await this.install(urlBuilder(this.version, this.arch));
+    }
+    /** Downloads the zip, verifies op's GPG signature, then adds it to PATH. */
+    async install(url) {
+        console.info(`Downloading 1Password CLI from: ${url}`);
+        const downloadPath = await downloadTool(url);
+        console.info("Installing 1Password CLI");
+        const extractedPath = await extractZip(downloadPath);
+        info("Verifying 1Password CLI signature");
+        await verifyLinuxSignature(external_path_namespaceObject.join(extractedPath, "op"), external_path_namespaceObject.join(extractedPath, "op.sig"));
+        info("1Password CLI signature verified");
+        addPath(extractedPath);
+        info("1Password CLI installed");
     }
 }
+
+;// CONCATENATED MODULE: ./src/op-cli-installer/github-action/cli-installer/macos-signature.ts
+
+
+const macos_signature_execFileAsync = (0,external_util_.promisify)(external_child_process_namespaceObject.execFile);
+// See https://www.1password.dev/cli/verify.
+const APPLE_DEVELOPER_TEAM_ID = "2BUA8C4S2C";
+// Append-only: old certs stay listed so historical `op` versions still verify.
+// See https://www.1password.dev/cli/verify.
+const ALLOWED_MACOS_SIGNING_CERT_FINGERPRINTS = [
+    "CAB578061B0209FB70934DA344EF6FEBCD3279B1C074C54B0D7D555743B9D89F",
+    "141DD87B2B231211F1440849798007DF621DE6EB3DAB985BC964EE9704C4A1C1",
+];
+const defaultPkgutilRunner = async (pkgPath) => {
+    const { stdout } = await macos_signature_execFileAsync("pkgutil", [
+        "--check-signature",
+        pkgPath,
+    ]);
+    return stdout;
+};
+// Returns just entry 1 (the signer cert) from the chain.
+const extractSignerCertSection = (pkgutilOutput) => {
+    const chainStart = pkgutilOutput.indexOf("Certificate Chain:");
+    if (chainStart === -1) {
+        return null;
+    }
+    const chainBody = pkgutilOutput.slice(chainStart);
+    const secondCert = /\n\s*2\.\s/.exec(chainBody);
+    return secondCert ? chainBody.slice(0, secondCert.index) : chainBody;
+};
+const parseSignerFingerprint = (signerSection) => {
+    const match = /SHA256 Fingerprint:\s*\n((?:[ \t]+[0-9A-Fa-f ]+\n?)+)/.exec(signerSection);
+    const captured = match?.[1];
+    return captured ? captured.replace(/\s+/g, "").toUpperCase() : null;
+};
+/**
+ * Hard-fails if the .pkg at pkgPath is not signed by AgileBits Inc.
+ * (2BUA8C4S2C) with a certificate on the allowlist above. Must run
+ * before any extraction of the .pkg contents.
+ */
+const verifyMacOsPackageSignature = async (pkgPath, runPkgutil = defaultPkgutilRunner) => {
+    const stdout = await runPkgutil(pkgPath);
+    const signerSection = extractSignerCertSection(stdout);
+    if (!signerSection) {
+        throw new Error(`1Password CLI signature verification failed: could not locate certificate chain in pkgutil output.\npkgutil output:\n${stdout}`);
+    }
+    if (!signerSection.includes(`(${APPLE_DEVELOPER_TEAM_ID})`)) {
+        throw new Error(`1Password CLI signature verification failed: expected developer team ID ${APPLE_DEVELOPER_TEAM_ID} not found in signer certificate.\npkgutil output:\n${stdout}`);
+    }
+    const signerFingerprint = parseSignerFingerprint(signerSection);
+    if (!signerFingerprint) {
+        throw new Error(`1Password CLI signature verification failed: could not parse signer cert SHA-256 fingerprint.\npkgutil output:\n${stdout}`);
+    }
+    if (!ALLOWED_MACOS_SIGNING_CERT_FINGERPRINTS.includes(signerFingerprint)) {
+        throw new Error(`1Password CLI signature verification failed: signer cert SHA-256 fingerprint ${signerFingerprint} is not on the allowlist. ` +
+            "If 1Password has rotated their installer signing cert, this action needs to be updated — please file an issue at https://github.com/1Password/install-cli-action/issues.");
+    }
+};
 
 ;// CONCATENATED MODULE: ./src/op-cli-installer/github-action/cli-installer/macos.ts
 
@@ -34557,24 +34848,28 @@ class LinuxInstaller extends CliInstaller {
 
 
 
-const execFileAsync = (0,external_util_.promisify)(external_child_process_namespaceObject.execFile);
+
+const macos_execFileAsync = (0,external_util_.promisify)(external_child_process_namespaceObject.execFile);
+/** Installs the 1Password CLI on macOS runners. */
 class MacOsInstaller extends CliInstaller {
     platform = "darwin"; // Node.js platform identifier for macOS
-    constructor(version) {
-        super(version);
-    }
+    /** Downloads, verifies, and installs the CLI for the configured version. */
     async installCli() {
         const urlBuilder = cliUrlBuilder[this.platform];
         await this.install(urlBuilder(this.version));
     }
-    // @actions/tool-cache package does not support .pkg files, so we need to handle the installation manually
+    // @actions/tool-cache package does not support .pkg files, so we need to handle the installation manually.
+    /** Downloads the pkg, verifies its signature, expands it, then adds the CLI to PATH. */
     async install(downloadUrl) {
         console.info(`Downloading 1Password CLI from: ${downloadUrl}`);
         const pkgPath = await downloadTool(downloadUrl);
         const pkgWithExtension = `${pkgPath}.pkg`;
         external_fs_namespaceObject.renameSync(pkgPath, pkgWithExtension);
+        info("Verifying 1Password CLI signature");
+        await verifyMacOsPackageSignature(pkgWithExtension);
+        info("1Password CLI signature verified");
         const expandDir = "temp-pkg";
-        await execFileAsync("pkgutil", ["--expand", pkgWithExtension, expandDir]);
+        await macos_execFileAsync("pkgutil", ["--expand", pkgWithExtension, expandDir]);
         const payloadPath = external_path_namespaceObject.join(expandDir, "op.pkg", "Payload");
         console.info("Installing 1Password CLI");
         const cliPath = await extractTar(payloadPath);
@@ -34585,16 +34880,83 @@ class MacOsInstaller extends CliInstaller {
     }
 }
 
+;// CONCATENATED MODULE: ./src/op-cli-installer/github-action/cli-installer/windows-signature.ts
+
+
+const windows_signature_execFileAsync = (0,external_util_.promisify)(external_child_process_namespaceObject.execFile);
+// Identifying field of 1Password's Authenticode signing cert for op.exe.
+// See https://www.1password.dev/cli/verify.
+const WINDOWS_SIGNER_SUBJECT_CN = "Agilebits";
+const defaultPowerShellRunner = async (script) => {
+    const { stdout } = await windows_signature_execFileAsync("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+    ]);
+    return stdout;
+};
+/**
+ * Verifies op.exe's Authenticode signature against 1Password's signing cert.
+ * Throws unless the signature is cryptographically valid and the signer is AgileBits.
+ */
+const verifyAuthenticodeSignature = async (opExePath, runPowerShell = defaultPowerShellRunner) => {
+    const escapedPath = opExePath.replace(/'/g, "''");
+    const script = [
+        `$ErrorActionPreference = 'Stop'`,
+        `$sig = Get-AuthenticodeSignature -LiteralPath '${escapedPath}'`,
+        `"Status=$($sig.Status)"`,
+        `"Subject=$($sig.SignerCertificate.Subject)"`,
+    ].join("; ");
+    const output = await runPowerShell(script);
+    const outputLines = output.split("\n").map((l) => l.trim());
+    const fieldValue = (prefix) => {
+        const matchingLine = outputLines.find((l) => l.startsWith(prefix));
+        if (!matchingLine) {
+            return undefined;
+        }
+        return matchingLine.slice(prefix.length);
+    };
+    // Reject unsigned or tampered binaries.
+    const status = fieldValue("Status=");
+    if (status !== "Valid") {
+        throw new Error(`Authenticode status is ${status ?? "unknown"}, expected Valid.\nGet-AuthenticodeSignature output:\n${output}`);
+    }
+    // Confirm the signer is AgileBits, not some other publisher. Trailing comma
+    // anchors the CN value so e.g. "CN=AgilebitsAttacker, ..." cannot match.
+    const subject = fieldValue("Subject=") ?? "";
+    const expectedCn = `CN=${WINDOWS_SIGNER_SUBJECT_CN},`;
+    if (!subject.includes(expectedCn)) {
+        throw new Error(`1Password CLI signature verification failed: signer Subject (${subject}) does not contain ${expectedCn} ` +
+            "If 1Password has rotated or renamed their signing identity, this action needs to be updated — please file an issue at https://github.com/1Password/install-cli-action/issues.");
+    }
+};
+
 ;// CONCATENATED MODULE: ./src/op-cli-installer/github-action/cli-installer/windows.ts
 
+
+
+
+
+/** Installs the 1Password CLI on Windows runners. */
 class WindowsInstaller extends CliInstaller {
     platform = "win32"; // Node.js platform identifier for Windows
-    constructor(version) {
-        super(version);
-    }
+    /** Downloads, verifies, and installs the CLI for the configured version. */
     async installCli() {
         const urlBuilder = cliUrlBuilder[this.platform];
-        await super.install(urlBuilder(this.version, this.arch));
+        await this.install(urlBuilder(this.version, this.arch));
+    }
+    /** Downloads the zip, verifies op.exe's Authenticode signature, then adds it to PATH. */
+    async install(url) {
+        console.info(`Downloading 1Password CLI from: ${url}`);
+        const downloadPath = await downloadTool(url);
+        console.info("Installing 1Password CLI");
+        const extractedPath = await extractZip(downloadPath);
+        info("Verifying 1Password CLI signature");
+        await verifyAuthenticodeSignature(external_path_namespaceObject.join(extractedPath, "op.exe"));
+        info("1Password CLI signature verified");
+        addPath(extractedPath);
+        info("1Password CLI installed");
     }
 }
 
