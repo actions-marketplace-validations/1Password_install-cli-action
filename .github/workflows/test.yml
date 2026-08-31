@@ -87,7 +87,7 @@ jobs:
           - channel: latest-beta
             versionPath: .CLI2.beta.version
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Capture expected ${{ matrix.channel }} version from app-updates
         id: expected
         run: |
@@ -118,7 +118,7 @@ jobs:
           - channel: latest-beta
             key: latestBeta
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Read expected baked-in ${{ matrix.channel }} version
         id: expected
         run: |
